@@ -1,0 +1,161 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.collections import LineCollection
+import pandas as pd
+from scipy.ndimage import uniform_filter1d
+from skimage.filters import apply_hysteresis_threshold
+from IPython.display import HTML
+from scipy.ndimage import gaussian_filter1d
+
+# A function to plot speedy trails
+def speedy_trail(x, y, ax=None, label='Speed', cmap='viridis'):
+    vel_x = np.gradient(x)
+    vel_y = np.gradient(y)
+    vel = np.zeros((x.shape[0], 2))
+    vel[:,0] = vel_x
+    vel[:,1] = vel_y
+
+    speed_array = np.linalg.norm(vel, axis=1, ord=2)
+    l = 10
+    if ax is None:
+        fig, ax = plt.subplots(figsize = (l, l*(20/50)))
+    else:
+        fig = ax.get_figure()
+
+    segment_speeds = speed_array[:-1]
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+    lc = LineCollection(segments, cmap='viridis')
+    lc.set_array(segment_speeds)
+    lc.set_linewidth(2.5)
+    line = ax.add_collection(lc)
+
+    fig.colorbar(line, ax=ax, label="speed")
+    ax.autoscale()
+
+    return ax
+
+# A function to return an array of erraticness scores
+def filter(x, y, k=7):
+    positions = np.vstack((x, y)) # (2, 1882)
+    diff = np.diff(positions, axis=1)
+    d = np.linalg.norm(diff, axis=0, ord=2)
+    # plt.hist(d)
+    med = np.nanmedian(d)
+    mad = np.nanmedian(np.abs(d - med))
+    S = max(med + 1.4826*mad, 1e-9)
+
+    # Step-size factor
+    A = np.minimum(d[:-1], d[1:])/S
+    A = np.minimum(A, 3)
+
+    # reversal factor
+    dot_prod = np.sum(diff[:,1:]*diff[:,:-1], axis=0)
+    denominator = d[:-1]*d[1:]
+    valid_step = ~np.isnan(denominator)
+
+    safe_mask = (denominator > 0)
+    cos_theta = np.zeros(dot_prod.shape[0])
+    cos_theta[safe_mask] = dot_prod[safe_mask]/denominator[safe_mask]
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+
+    R = np.full(dot_prod.shape, np.nan)
+    R[valid_step] = 0.0                              # zero-length step: not reversing
+    R[safe_mask] = (1 - cos_theta[safe_mask]) / 2
+
+    # erratic score
+    e = A*R
+    e_full = np.full(x.shape[0], np.nan) # padding to keep array size consistent
+    e_full[1:-1] = e
+
+    # e mean
+    # k = 7
+    valid = ~np.isnan(e_full)
+    num = uniform_filter1d(np.where(valid, e_full, 0.0), size=k, mode='constant', cval=0.0)
+    den = uniform_filter1d(valid.astype(float), size=k, mode='constant', cval=0.0)
+
+    E = np.full(x.shape[0], np.nan)
+    E[den > 0] = num[den > 0] / den[den > 0]
+
+    E_filled = np.nan_to_num(E, nan=0.0) 
+    return E_filled
+
+
+# blanket around the trajectory to aviod plateaus
+def blanket(x, y, method, k=None,r=None, sigma=5):
+    # we need to find the largest gap in the data to determine the window size
+    x_non_nan_idx = np.where(~np.isnan(x))[0]
+    padding_x = np.hstack(([-1], x_non_nan_idx, [len(x_non_nan_idx)]))
+
+    d_x = np.diff(padding_x)
+
+    lengths_of_nans_x = d_x[d_x>1]-1
+
+    if k is None:
+        k= 2*max(lengths_of_nans_x)+1
+
+    if method == "median":
+        smooth_x = pd.Series(x).rolling(window=k, min_periods=1, center=True).median().to_numpy()
+        smooth_y = pd.Series(y).rolling(window=k, min_periods=1, center=True).median().to_numpy()
+    elif method == "mean":
+        smooth_x = pd.Series(x).rolling(window=k, min_periods=1, center=True).mean().to_numpy()
+        smooth_y = pd.Series(y).rolling(window=k, min_periods=1, center=True).mean().to_numpy()
+    elif method == "gaussian":
+        smooth_x = gaussian_filter1d(x, sigma=sigma)
+        smooth_y = gaussian_filter1d(y, sigma=sigma)
+        # smooth_x = pd.Series(x).rolling(window=k, win_type="gaussian", min_periods=1, center=True).mean(std=sigma).to_numpy()
+        # smooth_y = pd.Series(y).rolling(window=k, win_type="gaussian", min_periods=1, center=True).mean(std=sigma).to_numpy()
+        
+    center_line = np.vstack((smooth_x, smooth_y))
+    clean_pos = np.vstack((x, y))
+
+    dist_from_cl = clean_pos - center_line
+    dist_from_cl = np.linalg.norm(dist_from_cl, axis=0, ord=2)
+
+    if r is None:
+        r = np.nanpercentile(dist_from_cl, 75)
+
+    out_of_blanket_mask = (dist_from_cl >= r)
+    out_of_blanket_mask[0], out_of_blanket_mask[-1] = False, False
+
+    curr_x_anchors = x.copy()
+    curr_y_anchors = y.copy()
+
+    curr_x_anchors[out_of_blanket_mask] = np.nan
+    curr_y_anchors[out_of_blanket_mask] = np.nan
+
+    fraction_of_track_retained = 1 - out_of_blanket_mask.sum()/len(x)
+
+    return curr_x_anchors, curr_y_anchors, smooth_x, smooth_y, fraction_of_track_retained
+
+# function to animate the trajectory
+def animate_trajectory(x, y, filename, ax=None):
+    total_frames = len(x)
+
+    valid_x = x[np.isfinite(x)]
+    valid_y = y[np.isfinite(y)]
+
+    if ax is None:
+        l = 10
+        fig, ax = plt.subplots(figsize = (l, l*(20/50)))
+    else:
+        fig = ax.get_figure()
+
+    ax.set_xlim(np.nanmin(valid_x)-0.5, np.nanmax(valid_x)+0.5)
+    ax.set_ylim(np.nanmin(valid_y)-0.5, np.nanmax(valid_y)+0.5)
+
+    frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, fontsize=12, verticalalignment='top')
+    line, = ax.plot([], [], color='black', linewidth=2)
+
+    def update(frame):
+        current_x = x[:frame+1]
+        current_y = y[:frame+1]
+        line.set_data(current_x, current_y)
+        frame_text.set_text(f'Index: {frame}')
+        return line,
+
+    ani = FuncAnimation(fig, update, frames=total_frames, interval=40, blit=False, repeat=False)
+    ani.save(f'{filename}.mp4', writer='ffmpeg', fps=25)
+
