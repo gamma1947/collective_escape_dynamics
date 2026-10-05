@@ -159,3 +159,42 @@ def animate_trajectory(x, y, filename, ax=None):
     ani = FuncAnimation(fig, update, frames=total_frames, interval=40, blit=False, repeat=False)
     ani.save(f'{filename}.mp4', writer='ffmpeg', fps=25)
 
+def animate_trajectory_all(data, filename, colors, ax=None):
+    total_frames = data.shape[1]
+    no_fishes = data.shape[0]
+
+    # valid_data = data[np.isfinite(data)]
+    # print(valid_data.shape)
+    valid_x = data[:, :, 0]
+    valid_y = data[:, :, 1]
+
+    if ax is None:
+        fig = plt.figure(figsize=(length,(length/(50/20))))
+        ax = fig.add_axes([0, 0, 1, 1])
+        # ax.axis('off')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        mid_way = (np.nanmin(valid_x) + np.nanmax(valid_x))/2
+        ax.axvline(x=mid_way-5)
+        ax.axvline(x=mid_way+5)
+    else:
+        fig = ax.get_figure()
+
+    ax.set_xlim(np.nanmin(valid_x)-0.5, np.nanmax(valid_x)+0.5)
+    ax.set_ylim(np.nanmin(valid_y)-0.5, np.nanmax(valid_y)+0.5)
+
+    frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, fontsize=12, verticalalignment='top')
+    lines = [ax.plot([], [], color=colors[i], linewidth=2, label=f'Fish {i+1}')[0] for i in range(no_fishes)]
+
+    def update(frame):
+        for i in range(no_fishes):
+            current_x = valid_x[i,:frame+1]
+            current_y = valid_y[i,:frame+1]
+            lines[i].set_data(current_x, current_y)
+        frame_text.set_text(f'Index: {frame}')
+        return (*lines, frame_text)
+
+    ani = FuncAnimation(fig, update, frames=total_frames, interval=40, blit=False, repeat=False)
+    ani.save(f'{filename}.mp4', writer='ffmpeg', fps=25)
+
+
