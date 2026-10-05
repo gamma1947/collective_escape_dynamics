@@ -4,9 +4,10 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.collections import LineCollection
 import pandas as pd
 from scipy.ndimage import uniform_filter1d
-from skimage.filters import apply_hysteresis_threshold
+# from skimage.filters import apply_hysteresis_threshold
 from IPython.display import HTML
 from scipy.ndimage import gaussian_filter1d
+from scipy.signal import savgol_filter
 
 # A function to plot speedy trails
 def speedy_trail(x, y, ax=None, label='Speed', cmap='viridis'):
@@ -82,11 +83,68 @@ def filter(x, y, k=7):
     E_filled = np.nan_to_num(E, nan=0.0) 
     return E_filled
 
+def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
+    # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
+    x_min_core, x_max_core = np.nanpercentile(x, [p_low, p_high])
+    y_min_core, y_max_core = np.nanpercentile(y, [p_low, p_high])
+    
+    # 2. Calculate the physical span of the track independently for X and Y
+    x_span = x_max_core - x_min_core
+    y_span = y_max_core - y_min_core
+    
+    # 3. Add a proportional buffer (e.g., 5% of the span) to safely enclose the track
+    X_MIN = x_min_core - (pad_fraction * x_span)
+    X_MAX = x_max_core + (pad_fraction * x_span)
+    
+    Y_MIN = y_min_core - (pad_fraction * y_span)
+    Y_MAX = y_max_core + (pad_fraction * y_span)
+    
+    # 4. Mask the outliers
+    out_of_bounds = (x < X_MIN) | (x > X_MAX) | (y < Y_MIN) | (y > Y_MAX)
+    
+    x_clean = x.copy()
+    y_clean = y.copy()
+    x_clean[out_of_bounds] = np.nan
+    y_clean[out_of_bounds] = np.nan
+    
+    return x_clean, y_clean
+
 
 # blanket around the trajectory to aviod plateaus
-def blanket(x, y, method, k=None,r=None, sigma=5):
+def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
+    # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
+    x_min_core, x_max_core = np.nanpercentile(x, [p_low, p_high])
+    y_min_core, y_max_core = np.nanpercentile(y, [p_low, p_high])
+    
+    # 2. Calculate the physical span of the track independently for X and Y
+    x_span = x_max_core - x_min_core
+    y_span = y_max_core - y_min_core
+    
+    # 3. Add a proportional buffer (e.g., 5% of the span) to safely enclose the track
+    X_MIN = x_min_core - (pad_fraction * x_span)
+    X_MAX = x_max_core + (pad_fraction * x_span)
+    
+    Y_MIN = y_min_core - (pad_fraction * y_span)
+    Y_MAX = y_max_core + (pad_fraction * y_span)
+    
+    # 4. Mask the outliers
+    out_of_bounds = (x < X_MIN) | (x > X_MAX) | (y < Y_MIN) | (y > Y_MAX)
+    
+    x_clean = x.copy()
+    y_clean = y.copy()
+    x_clean[out_of_bounds] = np.nan
+    y_clean[out_of_bounds] = np.nan
+    
+    return x_clean, y_clean
+
+
+# blanket around the trajectory to aviod plateaus
+def blanket(x, y, method,k=None,r=None, sigma=5, min_k=31, threshold=95):
     # we need to find the largest gap in the data to determine the window size
     x_non_nan_idx = np.where(~np.isnan(x))[0]
+    # bounding box
+    x, y = dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05)
+
     padding_x = np.hstack(([-1], x_non_nan_idx, [len(x_non_nan_idx)]))
 
     d_x = np.diff(padding_x)
@@ -94,14 +152,24 @@ def blanket(x, y, method, k=None,r=None, sigma=5):
     lengths_of_nans_x = d_x[d_x>1]-1
 
     if k is None:
-        k= 2*max(lengths_of_nans_x)+1
+        if len(lengths_of_nans_x) != 0:
+            k= 2*max(lengths_of_nans_x)+1
+        else:
+            k = 30
+    k = max(k, min_k)
+    if k % 2 == 0:
+        k += 1
+
+    temp_x = pd.Series(x).interpolate(method='linear').bfill().ffill().to_numpy()
+    temp_y = pd.Series(y).interpolate(method='linear').bfill().ffill().to_numpy()
 
     if method == "median":
         smooth_x = pd.Series(x).rolling(window=k, min_periods=1, center=True).median().to_numpy()
         smooth_y = pd.Series(y).rolling(window=k, min_periods=1, center=True).median().to_numpy()
-    elif method == "mean":
-        smooth_x = pd.Series(x).rolling(window=k, min_periods=1, center=True).mean().to_numpy()
-        smooth_y = pd.Series(y).rolling(window=k, min_periods=1, center=True).mean().to_numpy()
+    elif method == "savgol":
+        # polyorder=3 allows the filter to perfectly match sharp S-curves
+        smooth_x = savgol_filter(temp_x, window_length=k, polyorder=3)
+        smooth_y = savgol_filter(temp_y, window_length=k, polyorder=3)
     elif method == "gaussian":
         smooth_x = gaussian_filter1d(x, sigma=sigma)
         smooth_y = gaussian_filter1d(y, sigma=sigma)
@@ -115,8 +183,9 @@ def blanket(x, y, method, k=None,r=None, sigma=5):
     dist_from_cl = np.linalg.norm(dist_from_cl, axis=0, ord=2)
 
     if r is None:
-        r = np.nanpercentile(dist_from_cl, 75)
+        r = np.nanpercentile(dist_from_cl, threshold)
 
+    print(r)
     out_of_blanket_mask = (dist_from_cl >= r)
     out_of_blanket_mask[0], out_of_blanket_mask[-1] = False, False
 
@@ -145,6 +214,7 @@ def animate_trajectory(x, y, filename, ax=None):
 
     ax.set_xlim(np.nanmin(valid_x)-0.5, np.nanmax(valid_x)+0.5)
     ax.set_ylim(np.nanmin(valid_y)-0.5, np.nanmax(valid_y)+0.5)
+    ax.invert_yaxis()
 
     frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, fontsize=12, verticalalignment='top')
     line, = ax.plot([], [], color='black', linewidth=2)
@@ -155,7 +225,6 @@ def animate_trajectory(x, y, filename, ax=None):
         line.set_data(current_x, current_y)
         frame_text.set_text(f'Index: {frame}')
         return line,
-
     ani = FuncAnimation(fig, update, frames=total_frames, interval=40, blit=False, repeat=False)
     ani.save(f'{filename}.mp4', writer='ffmpeg', fps=25)
 
@@ -169,6 +238,7 @@ def animate_trajectory_all(data, filename, colors, ax=None):
     valid_y = data[:, :, 1]
 
     if ax is None:
+        length = 10
         fig = plt.figure(figsize=(length,(length/(50/20))))
         ax = fig.add_axes([0, 0, 1, 1])
         # ax.axis('off')
@@ -182,6 +252,7 @@ def animate_trajectory_all(data, filename, colors, ax=None):
 
     ax.set_xlim(np.nanmin(valid_x)-0.5, np.nanmax(valid_x)+0.5)
     ax.set_ylim(np.nanmin(valid_y)-0.5, np.nanmax(valid_y)+0.5)
+    ax.invert_yaxis()
 
     frame_text = ax.text(0.05, 0.95, '', transform=ax.transAxes, fontsize=12, verticalalignment='top')
     lines = [ax.plot([], [], color=colors[i], linewidth=2, label=f'Fish {i+1}')[0] for i in range(no_fishes)]
