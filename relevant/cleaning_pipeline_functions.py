@@ -83,6 +83,42 @@ def filter(x, y, k=7):
     E_filled = np.nan_to_num(E, nan=0.0) 
     return E_filled
 
+
+def detect_angle_spikes(vec, angle_threshold=None):
+    dot_prod_new = np.sum(vec[1:,:]*vec[:-1,:], axis=1)
+    denominator = (np.linalg.norm(vec[1:, :], axis=1)*np.linalg.norm(vec[:-1,:], axis=1))
+    safe_mask = (denominator > 0)
+    cos_theta_new = np.zeros(dot_prod_new.shape[0])
+    cos_theta_new[safe_mask] = dot_prod_new[safe_mask]/denominator[safe_mask]
+    cos_theta_new = np.clip(cos_theta_new, -1.0, 1.0)
+
+    if angle_threshold is None:
+        angle_threshold = -0.4
+
+    angle_spikes_mask = (cos_theta_new < angle_threshold)
+    angle_spikes_new = np.arange(len(cos_theta_new))[angle_spikes_mask]
+    return angle_spikes_new+1
+
+def clean_angle_spikes(x, y, angle_spikes, vec):
+    x_temp, y_temp = x.copy(), y.copy()
+    pos = np.vstack((x_temp, y_temp)).T
+    pos_diff = np.diff(pos[angle_spikes], axis=0)
+    diff_size = np.linalg.norm(pos_diff, ord=2, axis=1)
+    for i in range(len(angle_spikes)-1):
+        first_spike = angle_spikes[i]
+        next_spike = angle_spikes[i+1]
+        incomming_heading = vec[first_spike-1]
+        outgoing_heading = vec[next_spike+1]
+        dot_prod = np.sum(incomming_heading*outgoing_heading, )
+        denom = np.linalg.norm(incomming_heading, ord=2)*np.linalg.norm(outgoing_heading, ord=2)
+        cos_theta = dot_prod/denom        
+        if diff_size[i]<1 and cos_theta < 8:#no_of_frames_between < np.percentile(no_of_frames_between_list, 80):
+            # print(x_temp[first_spike], diff_size[i], x_temp[next_spike], next_spike-first_spike)
+            pad_size = 3#int(no_of_frames_between/2)
+            x_temp[first_spike-pad_size:next_spike+1+pad_size] = np.nan
+            y_temp[first_spike-pad_size:next_spike+1+pad_size] = np.nan
+    return x_temp, y_temp
+
 def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
     # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
     x_min_core, x_max_core = np.nanpercentile(x, [p_low, p_high])
