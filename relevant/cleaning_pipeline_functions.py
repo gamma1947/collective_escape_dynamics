@@ -99,25 +99,45 @@ def detect_angle_spikes(vec, angle_threshold=None):
     angle_spikes_new = np.arange(len(cos_theta_new))[angle_spikes_mask]
     return angle_spikes_new+1
 
-def clean_angle_spikes(x, y, angle_spikes, vec):
+def clean_angle_spikes(x, y, angle_spikes, vec, cos_threshold=None, diff_threshold=None):
     x_temp, y_temp = x.copy(), y.copy()
     pos = np.vstack((x_temp, y_temp)).T
+    
     pos_diff = np.diff(pos[angle_spikes], axis=0)
     diff_size = np.linalg.norm(pos_diff, ord=2, axis=1)
+
     for i in range(len(angle_spikes)-1):
         first_spike = angle_spikes[i]
         next_spike = angle_spikes[i+1]
-        incomming_heading = vec[first_spike-1]
-        outgoing_heading = vec[next_spike+1]
+
+        idx_in = max(0, first_spike - 1)
+        idx_out = min(len(vec) - 1, next_spike + 1)
+
+        incomming_heading = vec[idx_in]
+        outgoing_heading = vec[idx_out] 
         dot_prod = np.sum(incomming_heading*outgoing_heading, )
         denom = np.linalg.norm(incomming_heading, ord=2)*np.linalg.norm(outgoing_heading, ord=2)
-        cos_theta = dot_prod/denom        
-        if diff_size[i]<1 and cos_theta < 8:#no_of_frames_between < np.percentile(no_of_frames_between_list, 80):
-            # print(x_temp[first_spike], diff_size[i], x_temp[next_spike], next_spike-first_spike)
-            pad_size = 3#int(no_of_frames_between/2)
-            x_temp[first_spike-pad_size:next_spike+1+pad_size] = np.nan
-            y_temp[first_spike-pad_size:next_spike+1+pad_size] = np.nan
+        if denom == 0:
+            continue   
+
+        cos_theta = dot_prod/denom 
+         
+        if diff_threshold is None:
+            diff_threshold = 1
+        if cos_threshold is None:
+            cos_threshold = 0.4
+            
+        if diff_size[i]<diff_threshold and cos_theta < cos_threshold:#no_of_frames_between < np.percentile(no_of_frames_between_list, 80):
+                # print(x_temp[first_spike], diff_size[i], x_temp[next_spike], next_spike-first_spike)
+            pad_size = 2#int(no_of_frames_between/2)
+            start_idx = max(0, first_spike - pad_size)
+            end_idx = min(len(x_temp), next_spike + 1 + pad_size)
+            x_temp[start_idx:end_idx] = np.nan
+            y_temp[start_idx:end_idx] = np.nan
+            x_temp[0], y_temp[0] = x[0], y[0]
+            x_temp[-1], y_temp[-1] = x[-1], y[-1]
     return x_temp, y_temp
+
 
 def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
     # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
