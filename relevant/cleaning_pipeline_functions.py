@@ -129,16 +129,23 @@ def clean_angle_spikes(x, y, angle_spikes, vec, cos_threshold=None, diff_thresho
             
         if diff_size[i]<diff_threshold and cos_theta < cos_threshold:#no_of_frames_between < np.percentile(no_of_frames_between_list, 80):
                 # print(x_temp[first_spike], diff_size[i], x_temp[next_spike], next_spike-first_spike)
-            pad_size = 2#int(no_of_frames_between/2)
+            pad_size = 4#int(no_of_frames_between/2)
             start_idx = max(0, first_spike - pad_size)
             end_idx = min(len(x_temp), next_spike + 1 + pad_size)
             x_temp[start_idx:end_idx] = np.nan
             y_temp[start_idx:end_idx] = np.nan
-            x_temp[0], y_temp[0] = x[0], y[0]
-            x_temp[-1], y_temp[-1] = x[-1], y[-1]
+            
+    pad_1 = angle_spikes - 1
+    pad_2 = angle_spikes + 1
+    all_spike_idx = np.concatenate([pad_1, angle_spikes, pad_2])
+    all_spike_idx = np.clip(all_spike_idx, 0, len(x_temp) - 1)
+    all_spike_idx = np.array(list(set(all_spike_idx)))
+    x_temp[all_spike_idx] = np.nan
+    y_temp[all_spike_idx] = np.nan
+    x_temp[0], y_temp[0] = x[0], y[0]
+    x_temp[-1], y_temp[-1] = x[-1], y[-1]
     return x_temp, y_temp
 
-
 def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
     # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
     x_min_core, x_max_core = np.nanpercentile(x, [p_low, p_high])
@@ -195,7 +202,7 @@ def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
 
 
 # blanket around the trajectory to aviod plateaus
-def blanket(x, y, method,k=None,r=None, sigma=5, min_k=31, threshold=95):
+def blanket(x, y, method,k=None,r=None, sigma=5, min_k = 5, threshold=95):
     # we need to find the largest gap in the data to determine the window size
     x_non_nan_idx = np.where(~np.isnan(x))[0]
     # bounding box
@@ -211,7 +218,7 @@ def blanket(x, y, method,k=None,r=None, sigma=5, min_k=31, threshold=95):
         if len(lengths_of_nans_x) != 0:
             k= 2*max(lengths_of_nans_x)+1
         else:
-            k = 30
+            k = min_k
     k = max(k, min_k)
     if k % 2 == 0:
         k += 1
@@ -241,7 +248,8 @@ def blanket(x, y, method,k=None,r=None, sigma=5, min_k=31, threshold=95):
     if r is None:
         r = np.nanpercentile(dist_from_cl, threshold)
 
-    print(r)
+    print(f'k: {k}, r: {r}')
+
     out_of_blanket_mask = (dist_from_cl >= r)
     out_of_blanket_mask[0], out_of_blanket_mask[-1] = False, False
 
