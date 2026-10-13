@@ -248,15 +248,15 @@ def blanket(x, y, method, k=None, r=None, sigma=5, min_k=5, threshold=95):
     temp_y = pd.Series(y).interpolate(method='linear').bfill().ffill().to_numpy()
 
     if method == "median":
-        smooth_x = pd.Series(x).rolling(window=k, min_periods=1, center=True).median().to_numpy()
-        smooth_y = pd.Series(y).rolling(window=k, min_periods=1, center=True).median().to_numpy()
+        smooth_x = pd.Series(temp_x).rolling(window=k, min_periods=1, center=True).median().to_numpy()
+        smooth_y = pd.Series(temp_y).rolling(window=k, min_periods=1, center=True).median().to_numpy()
     elif method == "savgol":
         # polyorder=3 allows the filter to perfectly match sharp S-curves
         smooth_x = savgol_filter(temp_x, window_length=k, polyorder=3)
         smooth_y = savgol_filter(temp_y, window_length=k, polyorder=3)
     elif method == "gaussian":
-        smooth_x = gaussian_filter1d(x, sigma=sigma)
-        smooth_y = gaussian_filter1d(y, sigma=sigma)
+        smooth_x = gaussian_filter1d(temp_x, sigma=sigma)
+        smooth_y = gaussian_filter1d(temp_y, sigma=sigma)
         # smooth_x = pd.Series(x).rolling(window=k, win_type="gaussian", min_periods=1, center=True).mean(std=sigma).to_numpy()
         # smooth_y = pd.Series(y).rolling(window=k, win_type="gaussian", min_periods=1, center=True).mean(std=sigma).to_numpy()
         
