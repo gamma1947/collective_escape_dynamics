@@ -9,13 +9,26 @@ from IPython.display import HTML
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 
-# A function to plot speedy trails
-def speedy_trail(x, y, ax=None, label='Speed', cmap='viridis'):
-    vel_x = np.gradient(x)
-    vel_y = np.gradient(y)
+# seconds per frame given the frame rate is 100fps
+sec_per_frame = 0.01
+
+def speedy_trail(x, y, ax=None, cmap='viridis', label='Speed'):
+    """
+    This is a function to plot the trajectories showing the speed of the fish at each frame. 
+    Args:
+        x (array): x coordinates of the track
+        y (array): y coordinates of the track
+        ax (matplotlib.axes.Axes, optional): axis to plot the speedy trail on. If 'None' new axis will be created
+        cmap (string, optional): colormap of choice
+        label (string, optional): what the colorbar indicates
+    Returns:
+        ax ((matplotlib.axes.Axes): the axis on which the speedy trail is plotted
+    """
+    vel_x = np.gradient(x)/sec_per_frame
+    vel_y = np.gradient(y)/sec_per_frame
     vel = np.zeros((x.shape[0], 2))
-    vel[:,0] = vel_x
-    vel[:,1] = vel_y
+    vel[:, 0] = vel_x
+    vel[:, 1] = vel_y
 
     speed_array = np.linalg.norm(vel, axis=1, ord=2)
     l = 10
@@ -28,63 +41,27 @@ def speedy_trail(x, y, ax=None, label='Speed', cmap='viridis'):
     points = np.array([x, y]).T.reshape(-1, 1, 2)
     segments = np.concatenate([points[:-1], points[1:]], axis=1)
 
-    lc = LineCollection(segments, cmap='viridis')
+    lc = LineCollection(segments, cmap=cmap)
     lc.set_array(segment_speeds)
-    lc.set_linewidth(2.5)
+    lc.set_linewidth(1.5)
     line = ax.add_collection(lc)
 
-    fig.colorbar(line, ax=ax, label="speed")
+    fig.colorbar(line, ax=ax, label=label)
     ax.autoscale()
 
     return ax
 
-# A function to return an array of erraticness scores
-def filter(x, y, k=7):
-    positions = np.vstack((x, y)) # (2, 1882)
-    diff = np.diff(positions, axis=1)
-    d = np.linalg.norm(diff, axis=0, ord=2)
-    # plt.hist(d)
-    med = np.nanmedian(d)
-    mad = np.nanmedian(np.abs(d - med))
-    S = max(med + 1.4826*mad, 1e-9)
-
-    # Step-size factor
-    A = np.minimum(d[:-1], d[1:])/S
-    A = np.minimum(A, 3)
-
-    # reversal factor
-    dot_prod = np.sum(diff[:,1:]*diff[:,:-1], axis=0)
-    denominator = d[:-1]*d[1:]
-    valid_step = ~np.isnan(denominator)
-
-    safe_mask = (denominator > 0)
-    cos_theta = np.zeros(dot_prod.shape[0])
-    cos_theta[safe_mask] = dot_prod[safe_mask]/denominator[safe_mask]
-    cos_theta = np.clip(cos_theta, -1.0, 1.0)
-
-    R = np.full(dot_prod.shape, np.nan)
-    R[valid_step] = 0.0                              # zero-length step: not reversing
-    R[safe_mask] = (1 - cos_theta[safe_mask]) / 2
-
-    # erratic score
-    e = A*R
-    e_full = np.full(x.shape[0], np.nan) # padding to keep array size consistent
-    e_full[1:-1] = e
-
-    # e mean
-    # k = 7
-    valid = ~np.isnan(e_full)
-    num = uniform_filter1d(np.where(valid, e_full, 0.0), size=k, mode='constant', cval=0.0)
-    den = uniform_filter1d(valid.astype(float), size=k, mode='constant', cval=0.0)
-
-    E = np.full(x.shape[0], np.nan)
-    E[den > 0] = num[den > 0] / den[den > 0]
-
-    E_filled = np.nan_to_num(E, nan=0.0) 
-    return E_filled
-
-
 def detect_angle_spikes(vec, angle_threshold=None):
+    """
+    This functions finds out where there are unnatural sharp turns in the trajectory characterised by a close to -1
+    cosine value. Angle at a point is the angle between the incoming vector and the outgoing vector.
+    Args:
+        vec (array): array of vectors from position at frame[i] to frame[i+1]
+        angle_threshold (float, optional): the maximum cosine value at a point beyond which the point will be flagged 
+        as a spike
+    Returns:
+        angle_spikes_new (array): the indices where the spikes occur
+    """
     dot_prod_new = np.sum(vec[1:,:]*vec[:-1,:], axis=1)
     denominator = (np.linalg.norm(vec[1:, :], axis=1)*np.linalg.norm(vec[:-1,:], axis=1))
     safe_mask = (denominator > 0)
@@ -96,57 +73,103 @@ def detect_angle_spikes(vec, angle_threshold=None):
         angle_threshold = -0.4
 
     angle_spikes_mask = (cos_theta_new < angle_threshold)
-    angle_spikes_new = np.arange(len(cos_theta_new))[angle_spikes_mask]
-    return angle_spikes_new+1
+    angle_spikes_new = np.flatnonzero(angle_spikes_mask) +1
+    # one is added to identify the real spikes indices because the way the cos theta is calculated it points at the frame before
+    return angle_spikes_new
 
-def clean_angle_spikes(x, y, angle_spikes, vec, cos_threshold=None, diff_threshold=None):
+def clean_angle_spikes(x, y, angle_spikes, vec ,cos_threshold=None, diff_threshold=None, pad_len_1=None, pad_len_2=None):
+    """
+    Once angle spikes have been identified this functions cleans the spikes. Its not straightforward because,
+        * the spikes can extend upto few frames
+        * two spikes can occur in very close proximity (absolute distance wise) and can have varying number of frames 
+        between them (jitter)
+    Args:
+        x (array): x coordinates of the track
+        y (array): y coordinates of the track
+        angle_spikes (array): array of indices where the spikes occur
+        vec (array): array of vectors from position at frame[i] to frame[i+1]
+        cos_threshold (float, optional): the cosine value of the vector entering the spike and exiting the spike i.e., if spike 
+        is at 'i' then the angle between vector from 'i-2' to 'i-1' and 'i+1' to 'i+2'
+        diff_threshold (float, optional): absolute distance threshold between spikes. This is to capture spikes which are very 
+        close to each other
+        pad_len_1 (int, optional): number of buffer frames to be flagged for spikes which are very close to each other
+        pad_len_2 (int, optional): number of buffer frames to be flagged for lonely spikes
+    Returns:
+        x_temp, y_temp (array): clean trajectories
+    """
+    # finding the difference in position between each angle spike
     x_temp, y_temp = x.copy(), y.copy()
     pos = np.vstack((x_temp, y_temp)).T
     
     pos_diff = np.diff(pos[angle_spikes], axis=0)
     diff_size = np.linalg.norm(pos_diff, ord=2, axis=1)
 
-    for i in range(len(angle_spikes)-1):
-        first_spike = angle_spikes[i]
-        next_spike = angle_spikes[i+1]
+    # defining the optional argument values
+    if diff_threshold is None:
+        diff_threshold = 1
+    if cos_threshold is None:   
+        cos_threshold = 0.4
+    if pad_len_1 is None:
+        pad_len_1 = 3 
+    if pad_len_2 is None:
+        pad_len_2 = 2
 
-        idx_in = max(0, first_spike - 1)
-        idx_out = min(len(vec) - 1, next_spike + 1)
+    lonely_spikes = set(angle_spikes.tolist())
+    # delting grouped angle spikes
+    for i in range(len(angle_spikes) -1):
+        first_spike = angle_spikes[i]
+        next_spike = angle_spikes[i +1]
+
+        idx_in = max(0, first_spike -1)
+        idx_out = min(len(vec) -1, next_spike +1)
 
         incomming_heading = vec[idx_in]
         outgoing_heading = vec[idx_out] 
-        dot_prod = np.sum(incomming_heading*outgoing_heading, )
-        denom = np.linalg.norm(incomming_heading, ord=2)*np.linalg.norm(outgoing_heading, ord=2)
+        dot_prod = np.sum(incomming_heading * outgoing_heading)
+        denom = np.linalg.norm(incomming_heading, ord = 2)*np.linalg.norm(outgoing_heading, ord = 2)
         if denom == 0:
             continue   
 
         cos_theta = dot_prod/denom 
-         
-        if diff_threshold is None:
-            diff_threshold = 1
-        if cos_threshold is None:
-            cos_threshold = 0.4
             
-        if diff_size[i]<diff_threshold and cos_theta < cos_threshold:#no_of_frames_between < np.percentile(no_of_frames_between_list, 80):
-                # print(x_temp[first_spike], diff_size[i], x_temp[next_spike], next_spike-first_spike)
-            pad_size = 4#int(no_of_frames_between/2)
-            start_idx = max(0, first_spike - pad_size)
-            end_idx = min(len(x_temp), next_spike + 1 + pad_size)
+        if diff_size[i] < diff_threshold and cos_theta < cos_threshold:
+            lonely_spikes.remove(first_spike)
+            lonely_spikes.remove(next_spike)
+
+            pad_len = pad_len_1
+            start_idx = max(0, first_spike - pad_len)
+            end_idx = min(len(x_temp), next_spike + 1 + pad_len)
             x_temp[start_idx:end_idx] = np.nan
             y_temp[start_idx:end_idx] = np.nan
-            
-    pad_1 = angle_spikes - 1
-    pad_2 = angle_spikes + 1
-    all_spike_idx = np.concatenate([pad_1, angle_spikes, pad_2])
-    all_spike_idx = np.clip(all_spike_idx, 0, len(x_temp) - 1)
-    all_spike_idx = np.array(list(set(all_spike_idx)))
-    x_temp[all_spike_idx] = np.nan
-    y_temp[all_spike_idx] = np.nan
+
+    # deleting lonely angle spikes
+    pad_len = pad_len_2
+    for spike in lonely_spikes:
+        start_idx = max(0, spike - pad_len)
+        end_idx = min(len(x_temp), spike + 1 + pad_len)
+        faulty_idxs = np.arange(start_idx, end_idx)
+        x_temp[faulty_idxs] = np.nan
+        y_temp[faulty_idxs] = np.nan
+
     x_temp[0], y_temp[0] = x[0], y[0]
     x_temp[-1], y_temp[-1] = x[-1], y[-1]
+
     return x_temp, y_temp
 
+# blanket around the trajectory to aviod plateaus
 def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
+    """
+    Creates a bounding box around the data so that if there are any data points which are on the wall and very
+    far from the track then its deleted.
+    Args:
+        x (array): x coordinates of the track
+        y (array): y coordinates of the track
+        p_low (int): minimum percentile of real data to consider to find min extent
+        p_high (int): maximum percentile of real data to consider to find max extent
+        pad_fraction (float): fraction of the expanse to pad to safely eclose the track 
+    Returns:
+        x_clean, y_clean (array): clean trajectories
+    """
     # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
     x_min_core, x_max_core = np.nanpercentile(x, [p_low, p_high])
     y_min_core, y_max_core = np.nanpercentile(y, [p_low, p_high])
@@ -173,36 +196,34 @@ def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
     return x_clean, y_clean
 
 
-# blanket around the trajectory to aviod plateaus
-def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
-    # 1. Find the true edges of the track, ignoring extreme outliers (top/bottom 1%)
-    x_min_core, x_max_core = np.nanpercentile(x, [p_low, p_high])
-    y_min_core, y_max_core = np.nanpercentile(y, [p_low, p_high])
-    
-    # 2. Calculate the physical span of the track independently for X and Y
-    x_span = x_max_core - x_min_core
-    y_span = y_max_core - y_min_core
-    
-    # 3. Add a proportional buffer (e.g., 5% of the span) to safely enclose the track
-    X_MIN = x_min_core - (pad_fraction * x_span)
-    X_MAX = x_max_core + (pad_fraction * x_span)
-    
-    Y_MIN = y_min_core - (pad_fraction * y_span)
-    Y_MAX = y_max_core + (pad_fraction * y_span)
-    
-    # 4. Mask the outliers
-    out_of_bounds = (x < X_MIN) | (x > X_MAX) | (y < Y_MIN) | (y > Y_MAX)
-    
-    x_clean = x.copy()
-    y_clean = y.copy()
-    x_clean[out_of_bounds] = np.nan
-    y_clean[out_of_bounds] = np.nan
-    
-    return x_clean, y_clean
-
-
-# blanket around the trajectory to aviod plateaus
-def blanket(x, y, method,k=None,r=None, sigma=5, min_k = 5, threshold=95):
+# blanket around the trajectory to aviod plateaus (first pass filter)
+def blanket(x, y, method, k=None, r=None, sigma=5, min_k=5, threshold=95):
+    """
+    This is the first pass filter to weed out major deviations from the trajectory. The idea is you stitch a net along the 
+    trajectory and anything which overshoots the net is a faulty reading. You create the new by creating an estimated track 
+    from the raw data you have where it is smoothened over the areas where the tracking is faulty. You then measure distance
+    raw data from the smooth curve and deviations beyond a threshold are flagged.
+    Args:
+        x (array): x coordinates of the track
+        y (array): y coordinates of the track
+        method (string): There are three methods available
+                            * 'median' - estimated trajectory is computed by applying a sliding median filter
+                            * 'savgol' - estimated trajectory is computed by applying the Savitzky-Golay filter
+                            * 'gaussian' - estimated trajectory is computed by applying a 1D Gaussian filter. Independent of 
+                                            window size
+        k (int, optional): the size of the sliding window
+        r (int, optional): the distance threshold from the estimated trajectory beyond which the data is flagged 
+                            **Warning: change it only if you have a specific value in mind. Otherwise work with the threshold
+                                        parameter. Don't change both together
+        sigma (float, optional): standard deviation for the gaussian filter. 
+        min_k (int, optional): minimum window size
+        threshold (float, optional): the nth percentile you want to choose to calculate 'r', obtained by finding nth percentile
+                                     on the deviations of raw data from estimated trajectory
+    Returns:
+        x_anchors, y_anchors (array): retained part of the raw data after cleaning
+        smooth_x, smooth_y (array): estimated trajectory coordinates
+        fraction_of_track_retained (float): fraction of track retained
+    """
     # we need to find the largest gap in the data to determine the window size
     x_non_nan_idx = np.where(~np.isnan(x))[0]
     # bounding box
@@ -253,18 +274,26 @@ def blanket(x, y, method,k=None,r=None, sigma=5, min_k = 5, threshold=95):
     out_of_blanket_mask = (dist_from_cl >= r)
     out_of_blanket_mask[0], out_of_blanket_mask[-1] = False, False
 
-    curr_x_anchors = x.copy()
-    curr_y_anchors = y.copy()
+    x_anchors = x.copy()
+    y_anchors = y.copy()
 
-    curr_x_anchors[out_of_blanket_mask] = np.nan
-    curr_y_anchors[out_of_blanket_mask] = np.nan
+    x_anchors[out_of_blanket_mask] = np.nan
+    y_anchors[out_of_blanket_mask] = np.nan
 
     fraction_of_track_retained = 1 - out_of_blanket_mask.sum()/len(x)
 
-    return curr_x_anchors, curr_y_anchors, smooth_x, smooth_y, fraction_of_track_retained
+    return x_anchors, y_anchors, smooth_x, smooth_y, fraction_of_track_retained
 
 # function to animate the trajectory
 def animate_trajectory(x, y, filename, ax=None):
+    """
+    Function to animate single trajectory
+    Args:
+        x (array): x coordinates of the track
+        y (array): y coordinates of the track
+        filename (string): name of the output file
+        ax (matplotlib.axes.Axes): the axis on which the trajectory is plotted
+    """
     total_frames = len(x)
 
     valid_x = x[np.isfinite(x)]
@@ -293,6 +322,13 @@ def animate_trajectory(x, y, filename, ax=None):
     ani.save(f'{filename}.mp4', writer='ffmpeg', fps=25)
 
 def animate_trajectory_all(data, filename, colors, ax=None):
+    """
+    Function to animate trajectories of all fish
+    Args:
+        data (array): data of all fish
+        filename (string): name of the output file
+        ax (matplotlib.axes.Axes): the axis on which the trajectory is plotted
+    """
     total_frames = data.shape[1]
     no_fishes = data.shape[0]
 
@@ -332,4 +368,48 @@ def animate_trajectory_all(data, filename, colors, ax=None):
     ani = FuncAnimation(fig, update, frames=total_frames, interval=40, blit=False, repeat=False)
     ani.save(f'{filename}.mp4', writer='ffmpeg', fps=25)
 
+# unnecessary function
+# A function to return an array of erraticness scores
+# def filter(x, y, k=7):
+#     positions = np.vstack((x, y)) # (2, 1882)
+#     diff = np.diff(positions, axis=1)
+#     d = np.linalg.norm(diff, axis=0, ord=2)
+#     # plt.hist(d)
+#     med = np.nanmedian(d)
+#     mad = np.nanmedian(np.abs(d - med))
+#     S = max(med + 1.4826*mad, 1e-9)
 
+#     # Step-size factor
+#     A = np.minimum(d[:-1], d[1:])/S
+#     A = np.minimum(A, 3)
+
+#     # reversal factor
+#     dot_prod = np.sum(diff[:,1:]*diff[:,:-1], axis=0)
+#     denominator = d[:-1]*d[1:]
+#     valid_step = ~np.isnan(denominator)
+
+#     safe_mask = (denominator > 0)
+#     cos_theta = np.zeros(dot_prod.shape[0])
+#     cos_theta[safe_mask] = dot_prod[safe_mask]/denominator[safe_mask]
+#     cos_theta = np.clip(cos_theta, -1.0, 1.0)
+
+#     R = np.full(dot_prod.shape, np.nan)
+#     R[valid_step] = 0.0                              # zero-length step: not reversing
+#     R[safe_mask] = (1 - cos_theta[safe_mask]) / 2
+
+#     # erratic score
+#     e = A*R
+#     e_full = np.full(x.shape[0], np.nan) # padding to keep array size consistent
+#     e_full[1:-1] = e
+
+#     # e mean
+#     # k = 7
+#     valid = ~np.isnan(e_full)
+#     num = uniform_filter1d(np.where(valid, e_full, 0.0), size=k, mode='constant', cval=0.0)
+#     den = uniform_filter1d(valid.astype(float), size=k, mode='constant', cval=0.0)
+
+#     E = np.full(x.shape[0], np.nan)
+#     E[den > 0] = num[den > 0] / den[den > 0]
+
+#     E_filled = np.nan_to_num(E, nan=0.0) 
+#     return E_filled
