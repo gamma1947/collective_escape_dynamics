@@ -133,8 +133,8 @@ def clean_angle_spikes(x, y, angle_spikes, vec ,cos_threshold=None, diff_thresho
         cos_theta = dot_prod/denom 
             
         if diff_size[i] < diff_threshold and cos_theta < cos_threshold:
-            lonely_spikes.remove(first_spike)
-            lonely_spikes.remove(next_spike)
+            lonely_spikes.discard(first_spike)
+            lonely_spikes.discard(next_spike)
 
             pad_len = pad_len_1
             start_idx = max(0, first_spike - pad_len)
