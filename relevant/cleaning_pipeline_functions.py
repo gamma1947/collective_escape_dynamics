@@ -88,8 +88,7 @@ def clean_angle_spikes(x, y, angle_spikes, vec ,cos_threshold=None, diff_thresho
         y (array): y coordinates of the track
         angle_spikes (array): array of indices where the spikes occur
         vec (array): array of vectors from position at frame[i] to frame[i+1]
-        cos_threshold (float, optional): the cosine value of the vector entering the spike and exiting the spike i.e., if spike 
-        is at 'i' then the angle between vector from 'i-2' to 'i-1' and 'i+1' to 'i+2'
+        cos_threshold (float, optional): the cosine value of the vector entering the 'first spike' and exiting the 'next spike'
         diff_threshold (float, optional): absolute distance threshold between spikes. This is to capture spikes which are very 
         close to each other
         pad_len_1 (int, optional): number of buffer frames to be flagged for spikes which are very close to each other
@@ -132,7 +131,7 @@ def clean_angle_spikes(x, y, angle_spikes, vec ,cos_threshold=None, diff_thresho
 
         cos_theta = dot_prod/denom 
             
-        if diff_size[i] < diff_threshold and cos_theta < cos_threshold:
+        if diff_size[i] < diff_threshold and cos_theta > cos_threshold:
             lonely_spikes.discard(first_spike)
             lonely_spikes.discard(next_spike)
 
