@@ -196,7 +196,7 @@ def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
 
 
 # blanket around the trajectory to aviod plateaus (first pass filter)
-def blanket(x, y, method, k=None, r=None, sigma=5, min_k=5, threshold=95):
+def blanket(x, y, method, k=None, threshold=95, r=None, sigma=5, min_k=5):
     """
     This is the first pass filter to weed out major deviations from the trajectory. The idea is you stitch a net along the 
     trajectory and anything which overshoots the net is a faulty reading. You create the new by creating an estimated track 
