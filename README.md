@@ -1,5 +1,5 @@
 # Cleaning Trex Output
-<!--- cSpell:enable --->
+<!--- cSpell:disable --->
 Once you receive the tracks from TRex after tracking and correcting for ID switches, the data needs to be cleaned because there is a lot of jitter in the raw tracks. This jitter occurs when fish cross over each other or when they are moving slowly. These errors are primarily deviations in space and can be characterized by large departures from the actual trajectory of the fish.
 
 ## Preparing the data
@@ -30,10 +30,10 @@ This is run on the interpolated data after cleaning all the major spikes and jum
 #### Parameter
 1. `angle_threshold (float, optional) | Range: (-1,1)` : Large angles have a cosine value close to -1. Therefore any value lesser than this threshold value is flagged as an **angle spike**. Default set to -0.4
 
-Once all the **angle spikes** have been detected the next step is to clean them. This is done using the `clean_angle_spikes` function. There are some regions where a spike occurs and the identified path between the next spike is consistently faulty in the raw data (**long tandems**), and there are other spikes which occur in clusters or alone. 
+Once all the **angle spikes** have been detected the next step is to clean them. This is done using the `clean_angle_spikes` function. There are some regions where a spike occurs and the tracked path till the next spike is consistently faulty in the raw data (**long tandems**), and there are other spikes which occur in clusters or alone. 
 #### Parameters
-1. `cos_threshold (float, optional) | Range (-1,1)` : Cosine value of the angle between the vector entering the `first spike` and exiting the `next spike`. Should be close to 1 i.e., angle should be close to 0. So any cosine value greater than this threshold is considered within `True` for the conditional. This is to clear **long tandems**. 
-2. `diff_threshold (float, optional) | Range [0, inf)` : This threshold again to clear **long tandems**. This is the threshold for the distance between every pair of `first spike` and `next spike`. It has to be lesser than the dorsal width of the fish. Both this and the previous one should be `True` for that pair of consecutive spikes to be considered as a **long tandem**
+1. `cos_threshold (float, optional) | Range (-1,1)` : Cosine value of the angle between the vector entering the `first spike` and exiting the `next spike`. Should be close to 1 i.e., angle should be close to 0. So any cosine value greater than this threshold is considered as `True` for the conditional. This is to clear **long tandems**. 
+2. `diff_threshold (float, optional) | Range [0, inf)` : This threshold is again to clear **long tandems**. This is the threshold for the distance between every pair of `first spike` and `next spike`. It has to be lesser than the dorsal width of the fish (generally set to < 1cm). Both this and the previous condition should be `True` for that pair of consecutive spikes to be considered as a **long tandem**
 3. `pad_len_1 (int, optional) | Range [0, 10]` : Number of buffer frames to remove for **long tandems**.
 4. `pad_len_2 (int, optional) | Range [0, 10]` : Number of buffer frames to remove for all other **angle spikes**.
 
