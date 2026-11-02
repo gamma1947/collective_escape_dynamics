@@ -165,7 +165,7 @@ def dynamic_percentile_box(x, y, p_low=1, p_high=99, pad_fraction=0.05):
         y (array): y coordinates of the track
         p_low (int): minimum percentile of real data to consider to find min extent
         p_high (int): maximum percentile of real data to consider to find max extent
-        pad_fraction (float): fraction of the expanse to pad to safely eclose the track 
+        pad_fraction (float): fraction of the expanse to pad to safely enclose the track 
     Returns:
         x_clean, y_clean (array): clean trajectories
     """
